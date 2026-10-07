@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Predict VALORANT match outcomes using a Random Forest model trained on VCT data.">
+    <title>VCT Match Predictor</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='icons/valorant-logo.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <!-- Header -->
+        <div class="header">
+            <div class="header__icon">
+                <img src="{{ url_for('static', filename='icons/valorant-logo.png') }}" alt="Valorant Logo"
+                    style="width: 100%; height: 100%; object-fit: contain;">
+            </div>
+            <div class="header__text">
+                <h1>VCT Match Predictor</h1>
+                <p>Predict match outcomes using agent composition, map, and pick advantage.</p>
+            </div>
+        </div>
+
+        <!-- Team A -->
+        <div class="card">
+            <div class="card__title">
+                Team A | pick 5 agents
+                <span class="count" id="countA">0/5</span>
+            </div>
+            <div class="card__body">
+                <div id="gridA">
+                    {% for role, agents in grouped_agents.items() %}
+                    <div class="role-group">
+                        <div class="role-title">{{ role }}</div>
+                        <div class="agent-list">
+                            {% for agent in agents %}
+                            <div class="agent-chip" data-agent="{{ agent }}" data-team="a" onclick="toggle(this)"
+                                title="Win Rate: {{ agent_winrates.get(agent, 'N/A') }}%">
+                                <img src="{{ url_for('static', filename='icons/' + agent + '.png') }}"
+                                    class="agent-icon" alt="{{ agent }}" onerror="this.style.display='none'">
+                                <span>{{ agent }}</span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Team B -->
+        <div class="card">
+            <div class="card__title">
+                Team B | pick 5 agents
+                <span class="count" id="countB">0/5</span>
+            </div>
+            <div class="card__body">
+                <div id="gridB">
+                    {% for role, agents in grouped_agents.items() %}
+                    <div class="role-group">
+                        <div class="role-title">{{ role }}</div>
+                        <div class="agent-list">
+                            {% for agent in agents %}
+                            <div class="agent-chip" data-agent="{{ agent }}" data-team="b" onclick="toggle(this)"
+                                title="Win Rate: {{ agent_winrates.get(agent, 'N/A') }}%">
+                                <img src="{{ url_for('static', filename='icons/' + agent + '.png') }}"
+                                    class="agent-icon" alt="{{ agent }}" onerror="this.style.display='none'">
+                                <span>{{ agent }}</span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Map & Pick -->
+        <div class="card">
+            <div class="card__body">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label" for="mapSelect">Map</label>
+                        <select id="mapSelect">
+                            <option value="" disabled selected>Choose a map</option>
+                            {% for m in maps %}
+                            <option value="{{ m }}">{{ m }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Map Pick</label>
+                        <div class="radio-pills">
+                            <div class="radio-pill">
+                                <input type="radio" name="pick" id="pickA" value="1">
+                                <label for="pickA">Team A</label>
+                            </div>
+                            <div class="radio-pill">
+                                <input type="radio" name="pick" id="pickD" value="0" checked>
+                                <label for="pickD">Decider</label>
+                            </div>
+                            <div class="radio-pill">
+                                <input type="radio" name="pick" id="pickB" value="-1">
+                                <label for="pickB">Team B</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error -->
+        <div class="error-msg" id="errorMsg"></div>
+
+        <!-- Predict -->
+        <div class="card">
+            <div class="card__body">
+                <button class="btn-predict" id="btnPredict" onclick="predict()">Predict</button>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div class="card result-card" id="resultCard">
+            <div class="card__title">Result</div>
+            <div class="card__body">
+                <div class="result-bar">
+                    <div class="result-bar__a" id="barA" style="width:50%">50%</div>
+                    <div class="result-bar__b" id="barB" style="width:50%">50%</div>
+                </div>
+                <div class="result-summary">
+                    <span id="winnerText" class="result-winner"></span>
+                    <span id="confText"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            IT 20 Final Project · Predicting Valorant Match Outcomes Utilizing Supervised Machine Learning ·
+            <a href="{{ url_for('about') }}">How it Works</a>
+        </div>
+
+    </div>
+
+    <script>
+        const selA = new Set(), selB = new Set();
+
+        function toggle(el) {
+            const agent = el.dataset.agent, team = el.dataset.team;
+            const set = team === 'a' ? selA : selB;
+            const cls = team === 'a' ? 'selected-a' : 'selected-b';
+
+            if (el.classList.contains(cls)) {
+                el.classList.remove(cls);
+                set.delete(agent);
+            } else {
+                if (set.size >= 5) return showErr(`Team ${team.toUpperCase()} already has 5 agents.`);
+                el.classList.add(cls);
+                set.add(agent);
+            }
+            document.getElementById('countA').textContent = selA.size + '/5';
+            document.getElementById('countB').textContent = selB.size + '/5';
+        }
+
+        function showErr(msg) {
+            const el = document.getElementById('errorMsg');
+            el.textContent = msg;
+            el.classList.add('visible');
+            setTimeout(() => el.classList.remove('visible'), 3500);
+        }
+
+        async function predict() {
+            const map = document.getElementById('mapSelect').value;
+            const pick = document.querySelector('input[name="pick"]:checked').value;
+
+            if (selA.size !== 5) return showErr('Select 5 agents for Team A.');
+            if (selB.size !== 5) return showErr('Select 5 agents for Team B.');
+            if (!map) return showErr('Pick a map.');
+
+            const btn = document.getElementById('btnPredict');
+            btn.disabled = true;
+            btn.textContent = 'Predicting…';
+
+            try {
+                const r = await fetch('/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ team_a: [...selA], team_b: [...selB], map, pick_advantage: +pick })
+                });
+                const d = await r.json();
+                if (!r.ok) return showErr(d.error || 'Failed.');
+
+                document.getElementById('barA').style.width = d.team_a_prob + '%';
+                document.getElementById('barA').textContent = d.team_a_prob + '%';
+                document.getElementById('barB').style.width = d.team_b_prob + '%';
+                document.getElementById('barB').textContent = d.team_b_prob + '%';
+                document.getElementById('winnerText').textContent = d.winner + ' favored';
+                document.getElementById('confText').textContent = d.confidence + '% confidence';
+
+                const card = document.getElementById('resultCard');
+                card.classList.add('visible');
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } catch {
+                showErr('Network error.');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Predict';
+            }
+        }
+    </script>
+
+</body>
+
+</html>

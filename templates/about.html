@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="How the VCT Match Predictor model works.">
+    <title>How It Works - VCT Match Predictor</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='icons/valorant-logo.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <div class="card">
+            <div class="card__title">How It Works</div>
+            <div class="card__body about-section">
+                <p>This predictor estimates which team is more likely to win a map, based only on the agents each team
+                    picked, the map, and who picked the map.</p>
+
+                <h2>What You Enter</h2>
+                <ul>
+                    <li><strong>Team A and Team B agents:</strong> 5 each</li>
+                    <li><strong>Map:</strong> the map being played</li>
+                    <li><strong>Map pick:</strong> Team A, Team B, or Decider (the map neither team picked)</li>
+                </ul>
+
+                <h2>The Random Forest</h2>
+                <p>A random forest is a group of many decision trees that each make a guess, then vote. This one uses
+                    300 trees with a max depth of 5, trained on 886 maps from professional VCT matches.</p>
+
+                <p>For each matchup, the forest looks at 34 features:</p>
+                <div class="table-responsive">
+                    <table class="about-table">
+                        <tr>
+                            <th>Feature</th>
+                            <th>What it Means</th>
+                        </tr>
+                        <tr>
+                            <td>Pick advantage</td>
+                            <td>+1 if Team A picked the map, -1 if Team B did, 0 if it was the decider</td>
+                        </tr>
+                        <tr>
+                            <td>Agent difference</td>
+                            <td>For each agent: +1 if only Team A has it, -1 if only Team B has it, 0 otherwise</td>
+                        </tr>
+                        <tr>
+                            <td>Map</td>
+                            <td>A set of 0/1 flags: 1 for the map being played, 0 for all the others</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <h2>Keeping it Fair</h2>
+                <p>"Team A" and "Team B" are just labels, but a basic model could learn to favor whichever label happens
+                    to win more often. To prevent this, every training example was also added with the teams swapped and
+                    the result flipped. When you press Predict, the model checks both orderings and averages them, so
+                    swapping the teams always gives exactly the opposite result (if A gets 60%, B gets 40%).</p>
+
+                <h2>Agent Win-Rate Boost</h2>
+                <p>The forest relies heavily on the map, so after it makes its prediction, a modifier adjusts the result
+                    using agent win rates. It averages the smoothed win rate of the five agents each team picked. A team
+                    with higher-win-rate agents gets a slight boost. Smoothing keeps agents with few games on a map from
+                    skewing the result.</p>
+
+                <h2>Missing-Role Penalties</h2>
+                <p>After the win-rate boost, role penalties are applied. A team without a certain role is at a
+                    disadvantage, and how much depends on whether they're attacking or defending. Each half gets its own
+                    multiplier (for example, ×0.75 means a 25% reduction).</p>
+
+                <h3>Attack Half</h3>
+                <div class="table-responsive">
+                    <table class="about-table">
+                        <tr>
+                            <th>Missing Role</th>
+                            <th>Penalty</th>
+                            <th>Why</th>
+                        </tr>
+                        <tr>
+                            <td>Controller</td>
+                            <td>×0.75 (extreme)</td>
+                            <td>Pushing sites with no smokes is suicidal against operator crossfires</td>
+                        </tr>
+                        <tr>
+                            <td>Duelist</td>
+                            <td>×0.90 (moderate-high)</td>
+                            <td>No dive mechanics, so the team stalls at chokepoints</td>
+                        </tr>
+                        <tr>
+                            <td>Initiator</td>
+                            <td>×0.80 (extreme)</td>
+                            <td>Blind entries into active Sentinel traps</td>
+                        </tr>
+                        <tr>
+                            <td>Sentinel</td>
+                            <td>×0.95 (low-moderate)</td>
+                            <td>Mostly hurts post-plant holds and flank watch</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <h3>Defense Half</h3>
+                <div class="table-responsive">
+                    <table class="about-table">
+                        <tr>
+                            <th>Missing Role</th>
+                            <th>Penalty</th>
+                            <th>Why</th>
+                        </tr>
+                        <tr>
+                            <td>Controller</td>
+                            <td>×0.85 (high)</td>
+                            <td>Can't isolate chokepoints or slow coordinated rushes</td>
+                        </tr>
+                        <tr>
+                            <td>Duelist</td>
+                            <td>×0.98 (low)</td>
+                            <td>Barely affects defensive site anchoring</td>
+                        </tr>
+                        <tr>
+                            <td>Initiator</td>
+                            <td>×0.90 (moderate)</td>
+                            <td>Weaker retake info, though audio and anchors help</td>
+                        </tr>
+                        <tr>
+                            <td>Sentinel</td>
+                            <td>×0.75 (extreme)</td>
+                            <td>No stalling tools while teammates rotate</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <p>Because every team plays both sides, the attack and defense multipliers are averaged. That average is
+                    then converted into a ratio between Team A and Team B, which adjusts the forest's final probability.
+                </p>
+
+                <h2>Limitations</h2>
+                <p>The model only sees agent picks, the map, and who picked it. It does not know about player skill,
+                    team coordination, recent form, or economy. Its accuracy is about the same as always guessing the
+                    more common outcome, so use it to explore how compositions and maps interact, not as a forecast.</p>
+            </div>
+        </div>
+
+        <div class="footer">
+            <a href="{{ url_for('home') }}">← Back to Predictor</a>
+        </div>
+
+    </div>
+
+</body>
+
+</html>
