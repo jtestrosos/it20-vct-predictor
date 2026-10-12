@@ -53,6 +53,42 @@ def calculate_role_penalty(team_agents):
     # Average both halves - in a standard match each team plays both sides
     return (atk + dfn) / 2.0
 
+
+def get_role_details(team_agents):
+    """Return detailed breakdown of role coverage and penalties for a team."""
+    team_roles = set(ROLES_MAP.get(a.lower(), "Others") for a in team_agents)
+    standard_roles = ["Controllers", "Duelists", "Initiators", "Sentinels"]
+    present_roles = [r for r in standard_roles if r in team_roles]
+    missing_roles = [r for r in standard_roles if r not in team_roles]
+
+    atk_mult = 1.0
+    missing_atk = []
+    for role, factor in ATTACK_PENALTIES.items():
+        if role not in team_roles:
+            atk_mult *= factor
+            missing_atk.append({"role": role, "penalty": round((1.0 - factor) * 100, 1)})
+
+    dfn_mult = 1.0
+    missing_dfn = []
+    for role, factor in DEFENSE_PENALTIES.items():
+        if role not in team_roles:
+            dfn_mult *= factor
+            missing_dfn.append({"role": role, "penalty": round((1.0 - factor) * 100, 1)})
+
+    composite = (atk_mult + dfn_mult) / 2.0
+
+    return {
+        "attack_mult": round(atk_mult * 100, 1),
+        "defense_mult": round(dfn_mult * 100, 1),
+        "composite": composite,
+        "composite_pct": round(composite * 100, 1),
+        "present_roles": present_roles,
+        "missing_roles": missing_roles,
+        "missing_atk": missing_atk,
+        "missing_dfn": missing_dfn,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Load the trained model bundle
 # ---------------------------------------------------------------------------
@@ -91,6 +127,57 @@ def predict_win_probability(team_a_agents, team_b_agents, map_name, pick_advanta
     return prob
 
 
+def get_tree_analysis(team_a_agents, team_b_agents, map_name, pick_advantage=0):
+    """Extract voting consensus and probability distribution across the 300 decision trees."""
+    b = get_bundle()
+    row = dict.fromkeys(b["features"], 0.0)
+    for a in team_a_agents:
+        key = f"Agent_{a.lower()}"
+        if key in row:
+            row[key] += 1
+    for a in team_b_agents:
+        key = f"Agent_{a.lower()}"
+        if key in row:
+            row[key] -= 1
+    row["Pick_Advantage"] = float(pick_advantage)
+    map_key = f"Map_{map_name}"
+    if map_key in row:
+        row[map_key] = 1.0
+
+    df = pd.DataFrame([row])[b["features"]]
+    Xv = np.asarray(df, dtype=float)
+    model = b["model"]
+    Xs = model._swap(Xv)
+
+    tree_probs = [
+        float(0.5 * (t.predict_proba(Xv)[0, 1] + 1.0 - t.predict_proba(Xs)[0, 1]))
+        for t in model.estimator_.estimators_
+    ]
+
+    votes_a = sum(1 for p in tree_probs if p > 0.505)
+    votes_b = sum(1 for p in tree_probs if p < 0.495)
+    neutral = len(tree_probs) - votes_a - votes_b
+
+    # Distribution buckets for chart histogram
+    b1 = sum(1 for p in tree_probs if p < 0.35)
+    b2 = sum(1 for p in tree_probs if 0.35 <= p < 0.48)
+    b3 = sum(1 for p in tree_probs if 0.48 <= p <= 0.52)
+    b4 = sum(1 for p in tree_probs if 0.52 < p <= 0.65)
+    b5 = sum(1 for p in tree_probs if p > 0.65)
+
+    return {
+        "votes_a": votes_a,
+        "votes_b": votes_b,
+        "neutral": neutral,
+        "total": len(tree_probs),
+        "pct_a": round((votes_a / len(tree_probs)) * 100, 1),
+        "pct_b": round((votes_b / len(tree_probs)) * 100, 1),
+        "pct_neutral": round((neutral / len(tree_probs)) * 100, 1),
+        "buckets": [b1, b2, b3, b4, b5],
+        "bucket_labels": ["< 35% (Team B Favored)", "35–48% (Lean Team B)", "48–52% (Dead Heat)", "52–65% (Lean Team A)", "> 65% (Team A Favored)"]
+    }
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -113,7 +200,7 @@ def home():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    """AJAX endpoint - returns JSON with the prediction."""
+    """AJAX endpoint - returns JSON with the prediction and detailed estimation breakdown."""
     data = request.get_json()
 
     team_a = data.get("team_a", [])
@@ -132,39 +219,75 @@ def predict():
     if errors:
         return jsonify({"error": " ".join(errors)}), 400
 
-    prob_a = predict_win_probability(team_a, team_b, map_name, pick_adv)
-    
+    raw_rf_prob_a = predict_win_probability(team_a, team_b, map_name, pick_adv)
+    raw_rf_prob_b = 1.0 - raw_rf_prob_a
+
     # Extract agent win rates for adjustment
     bundle_data = get_bundle()
     winrates = bundle_data.get("agent_winrates", {})
-    avg_wr_a = sum(winrates.get(a.lower(), 50.0) for a in team_a) / 5.0
-    avg_wr_b = sum(winrates.get(a.lower(), 50.0) for a in team_b) / 5.0
-    
+
+    agents_a_list = [
+        {"name": a, "winrate": winrates.get(a.lower(), 50.0), "role": ROLES_MAP.get(a.lower(), "Others")}
+        for a in team_a
+    ]
+    agents_b_list = [
+        {"name": a, "winrate": winrates.get(a.lower(), 50.0), "role": ROLES_MAP.get(a.lower(), "Others")}
+        for a in team_b
+    ]
+
+    avg_wr_a = sum(x["winrate"] for x in agents_a_list) / 5.0
+    avg_wr_b = sum(x["winrate"] for x in agents_b_list) / 5.0
+    wr_delta = avg_wr_a - avg_wr_b
+
     # The difference in average win rates scales the probability (scaled by 50% so it doesn't overpower the RF model)
     wr_modifier = ((avg_wr_a - avg_wr_b) / 100.0) * 0.5
-    
+
     # Apply context-aware role multipliers (attack + defense averaged)
-    mult_a = calculate_role_penalty(team_a)   # 0-1, 1.0 = no penalty
-    mult_b = calculate_role_penalty(team_b)
+    role_a = get_role_details(team_a)
+    role_b = get_role_details(team_b)
+    mult_a = role_a["composite"]
+    mult_b = role_b["composite"]
 
     # Scale the base probability by the ratio of team multipliers.
-    # If both teams are balanced the ratio is ~1 and prob barely moves.
-    # If Team A is missing roles, mult_a < mult_b → ratio < 1 → prob drops.
     if mult_a + mult_b > 0:
         role_ratio = mult_a / (mult_a + mult_b)   # maps to 0-1 range
     else:
         role_ratio = 0.5
 
+    # Shift components from baseline RF
+    shift_wr = wr_modifier * 0.2
+    shift_role = (role_ratio - raw_rf_prob_a) * 0.2
+
     # Blend: 60% RF model + 20% role context + 20% win-rate modifier headroom
-    prob_a = prob_a * 0.6 + role_ratio * 0.2 + (prob_a + wr_modifier) * 0.2
+    prob_a = raw_rf_prob_a * 0.6 + role_ratio * 0.2 + (raw_rf_prob_a + wr_modifier) * 0.2
     prob_a = max(0.01, min(0.99, prob_a))
-    prob_b = 1 - prob_a
+    prob_b = 1.0 - prob_a
+
+    tree_info = get_tree_analysis(team_a, team_b, map_name, pick_adv)
 
     return jsonify({
         "team_a_prob": round(prob_a * 100, 1),
         "team_b_prob": round(prob_b * 100, 1),
         "winner": "Team A" if prob_a > 0.5 else "Team B",
         "confidence": round(max(prob_a, prob_b) * 100, 1),
+        "breakdown": {
+            "rf_base_a": round(raw_rf_prob_a * 100, 1),
+            "rf_base_b": round(raw_rf_prob_b * 100, 1),
+            "shift_wr": round(shift_wr * 100, 2),
+            "shift_role": round(shift_role * 100, 2),
+            "final_prob_a": round(prob_a * 100, 1),
+            "final_prob_b": round(prob_b * 100, 1),
+            "avg_wr_a": round(avg_wr_a, 1),
+            "avg_wr_b": round(avg_wr_b, 1),
+            "wr_delta": round(wr_delta, 1),
+            "agents_a": agents_a_list,
+            "agents_b": agents_b_list,
+            "role_a": role_a,
+            "role_b": role_b,
+            "role_ratio_a": round(role_ratio * 100, 1),
+            "role_ratio_b": round((1.0 - role_ratio) * 100, 1),
+            "tree_info": tree_info,
+        }
     })
 
 

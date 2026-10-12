@@ -8,6 +8,7 @@
     <title>VCT Match Predictor</title>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='icons/valorant-logo.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
 </head>
 
 <body>
@@ -126,16 +127,112 @@
 
         <!-- Results -->
         <div class="card result-card" id="resultCard">
-            <div class="card__title">Result</div>
+            <div class="card__title">
+                <span>Outcome Prediction</span>
+                <span class="result-conf" id="confText"></span>
+            </div>
             <div class="card__body">
+                <div class="result-teams-header">
+                    <span class="team-label team-a-label">Team A</span>
+                    <span class="vs-label">MATCHUP</span>
+                    <span class="team-label team-b-label">Team B</span>
+                </div>
                 <div class="result-bar">
                     <div class="result-bar__a" id="barA" style="width:50%">50%</div>
                     <div class="result-bar__b" id="barB" style="width:50%">50%</div>
                 </div>
                 <div class="result-summary">
                     <span id="winnerText" class="result-winner"></span>
-                    <span id="confText"></span>
+                    <span id="matchupSummary" class="text-dim"></span>
                 </div>
+                <div class="result-caption">
+                    Final estimate combines <strong>60% Random Forest model</strong>, <strong>20% historical agent win rates</strong>, and <strong>20% team role synergy</strong>.
+                </div>
+            </div>
+        </div>
+
+        <!-- Estimation Breakdown & Graphs Card -->
+        <div class="card estimation-card" id="estimationCard">
+            <div class="card__title">
+                <span>How This Outcome Was Estimated</span>
+                <span class="count">4 Analytical Views</span>
+            </div>
+            <div class="card__body">
+                <!-- Navigation Tabs -->
+                <div class="graph-tabs">
+                    <button type="button" class="graph-tab active" data-tab="pipeline" onclick="switchGraphTab('pipeline')">
+                        <span>📊</span> Estimation Pipeline
+                    </button>
+                    <button type="button" class="graph-tab" data-tab="factors" onclick="switchGraphTab('factors')">
+                        <span>⚔️</span> Factor Comparison
+                    </button>
+                    <button type="button" class="graph-tab" data-tab="agents" onclick="switchGraphTab('agents')">
+                        <span>🎯</span> Agent Win Rates
+                    </button>
+                    <button type="button" class="graph-tab" data-tab="trees" onclick="switchGraphTab('trees')">
+                        <span>🌲</span> 300 Tree Ensemble
+                    </button>
+                </div>
+
+                <!-- Tab 1: Pipeline Waterfall -->
+                <div class="tab-pane active" id="panePipeline">
+                    <div class="chart-header">
+                        <div class="chart-title">Step-by-Step Probability Derivation (Estimation Pipeline)</div>
+                        <div class="chart-desc">Shows how the machine learning baseline is adjusted by agent win rates and missing-role penalties.</div>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="chartPipeline"></canvas>
+                    </div>
+
+                    <!-- Step Cards -->
+                    <div class="pipeline-grid" id="pipelineGrid"></div>
+                </div>
+
+                <!-- Tab 2: Factors Comparison -->
+                <div class="tab-pane" id="paneFactors">
+                    <div class="chart-header">
+                        <div class="chart-title">Team A vs Team B Factor Comparison</div>
+                        <div class="chart-desc">Direct head-to-head metrics across the 3 core pillars of the prediction engine.</div>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="chartFactors"></canvas>
+                    </div>
+                    <div class="factors-summary" id="factorsSummary"></div>
+                </div>
+
+                <!-- Tab 3: Agent Win Rates -->
+                <div class="tab-pane" id="paneAgents">
+                    <div class="chart-header">
+                        <div class="chart-title">Agent Historical Win Rates</div>
+                        <div class="chart-desc">Smoothed historical pro win rates for each drafted agent (dashed line = 50% baseline).</div>
+                    </div>
+                    <div class="chart-wrapper chart-wrapper--tall">
+                        <canvas id="chartAgents"></canvas>
+                    </div>
+                    <div class="agent-stats-callout" id="agentStatsCallout"></div>
+                </div>
+
+                <!-- Tab 4: 300 Decision Trees -->
+                <div class="tab-pane" id="paneTrees">
+                    <div class="chart-header">
+                        <div class="chart-title">Random Forest Voting Consensus (300 Decision Trees)</div>
+                        <div class="chart-desc">Distribution of individual decision tree predictions for this exact matchup and map.</div>
+                    </div>
+                    <div class="tree-votes-bar" id="treeVotesBar"></div>
+                    <div class="chart-wrapper">
+                        <canvas id="chartTrees"></canvas>
+                    </div>
+                </div>
+
+                <!-- Role Composition Inspection Section (Always visible below graph) -->
+                <div class="role-inspection-box">
+                    <div class="role-inspection-title">Team Role Composition & Half Coverage</div>
+                    <div class="role-teams-grid">
+                        <div class="role-team-card" id="roleCardA"></div>
+                        <div class="role-team-card" id="roleCardB"></div>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -149,6 +246,18 @@
 
     <script>
         const selA = new Set(), selB = new Set();
+        let currentBreakdown = null;
+        let activeTab = 'pipeline';
+        const chartInstances = {};
+
+        // Configure Chart.js global theme defaults
+        if (typeof Chart !== 'undefined') {
+            Chart.defaults.color = '#818384';
+            Chart.defaults.font.family = "'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+            Chart.defaults.font.size = 12;
+            Chart.defaults.plugins.legend.labels.usePointStyle = true;
+            Chart.defaults.plugins.legend.labels.pointStyle = 'rectRounded';
+        }
 
         function toggle(el) {
             const agent = el.dataset.agent, team = el.dataset.team;
@@ -195,22 +304,469 @@
                 const d = await r.json();
                 if (!r.ok) return showErr(d.error || 'Failed.');
 
+                // Outcome bar
                 document.getElementById('barA').style.width = d.team_a_prob + '%';
                 document.getElementById('barA').textContent = d.team_a_prob + '%';
                 document.getElementById('barB').style.width = d.team_b_prob + '%';
                 document.getElementById('barB').textContent = d.team_b_prob + '%';
                 document.getElementById('winnerText').textContent = d.winner + ' favored';
                 document.getElementById('confText').textContent = d.confidence + '% confidence';
+                document.getElementById('matchupSummary').textContent = `Map: ${map} · Pick: ${pick == '1' ? 'Team A' : (pick == '-1' ? 'Team B' : 'Decider')}`;
 
-                const card = document.getElementById('resultCard');
-                card.classList.add('visible');
-                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            } catch {
+                currentBreakdown = d.breakdown;
+
+                // Show cards
+                document.getElementById('resultCard').classList.add('visible');
+                const estCard = document.getElementById('estimationCard');
+                estCard.classList.add('visible');
+
+                // Render content and graphs
+                renderBreakdownUI(d);
+                renderActiveTabChart();
+
+                document.getElementById('resultCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } catch (err) {
+                console.error(err);
                 showErr('Network error.');
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Predict';
             }
+        }
+
+        function switchGraphTab(tabKey) {
+            activeTab = tabKey;
+            document.querySelectorAll('.graph-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === tabKey);
+            });
+            document.querySelectorAll('.tab-pane').forEach(pane => {
+                pane.classList.remove('active');
+            });
+
+            const paneId = 'pane' + tabKey.charAt(0).toUpperCase() + tabKey.slice(1);
+            const activePane = document.getElementById(paneId);
+            if (activePane) activePane.classList.add('active');
+
+            // Render/resize chart on next tick
+            setTimeout(() => {
+                renderActiveTabChart();
+            }, 30);
+        }
+
+        function renderBreakdownUI(data) {
+            const b = data.breakdown;
+
+            // 1. Pipeline step cards
+            const pGrid = document.getElementById('pipelineGrid');
+            const shiftWrClass = b.shift_wr > 0 ? 'shift-pos' : (b.shift_wr < 0 ? 'shift-neg' : 'shift-neutral');
+            const shiftWrSign = b.shift_wr > 0 ? '+' : '';
+            const shiftRoleClass = b.shift_role > 0 ? 'shift-pos' : (b.shift_role < 0 ? 'shift-neg' : 'shift-neutral');
+            const shiftRoleSign = b.shift_role > 0 ? '+' : '';
+
+            pGrid.innerHTML = `
+                <div class="pipeline-step">
+                    <span class="pipeline-step__num">Stage 1 · 60% Weight</span>
+                    <span class="pipeline-step__title">Random Forest</span>
+                    <span class="pipeline-step__val">${b.rf_base_a}%</span>
+                    <span class="pipeline-step__shift shift-neutral">Model Baseline</span>
+                    <p class="pipeline-step__desc">300 trees evaluated map synergy, draft picks, and agent counters.</p>
+                </div>
+                <div class="pipeline-step">
+                    <span class="pipeline-step__num">Stage 2 · 20% Weight</span>
+                    <span class="pipeline-step__title">Agent Win Rates</span>
+                    <span class="pipeline-step__val">${b.avg_wr_a}% vs ${b.avg_wr_b}%</span>
+                    <span class="pipeline-step__shift ${shiftWrClass}">${shiftWrSign}${b.shift_wr}% Shift</span>
+                    <p class="pipeline-step__desc">${b.wr_delta >= 0 ? '+' : ''}${b.wr_delta}% pro win rate delta across picked rosters.</p>
+                </div>
+                <div class="pipeline-step">
+                    <span class="pipeline-step__num">Stage 3 · 20% Weight</span>
+                    <span class="pipeline-step__title">Role Synergy</span>
+                    <span class="pipeline-step__val">${b.role_a.composite_pct}% vs ${b.role_b.composite_pct}%</span>
+                    <span class="pipeline-step__shift ${shiftRoleClass}">${shiftRoleSign}${b.shift_role}% Shift</span>
+                    <p class="pipeline-step__desc">Penalizes missing controllers, duelists, initiators, or sentinels.</p>
+                </div>
+                <div class="pipeline-step">
+                    <span class="pipeline-step__num">Stage 4 · Final</span>
+                    <span class="pipeline-step__title">Estimated Result</span>
+                    <span class="pipeline-step__val" style="color: ${b.final_prob_a >= 50 ? 'var(--accent)' : 'var(--blue)'}">${b.final_prob_a}%</span>
+                    <span class="pipeline-step__shift ${b.final_prob_a >= 50 ? 'shift-pos' : 'shift-neg'}">${data.winner} Favored</span>
+                    <p class="pipeline-step__desc">Blended prediction synthesized across all 3 analytical pillars.</p>
+                </div>
+            `;
+
+            // 2. Factors summary
+            const fSum = document.getElementById('factorsSummary');
+            fSum.innerHTML = `
+                <div class="factor-pill">
+                    <div class="factor-pill__title">Random Forest Matchup Base</div>
+                    <div class="factor-pill__vs">
+                        <span style="color:var(--accent)">Team A: ${b.rf_base_a}%</span>
+                        <span style="color:var(--blue)">Team B: ${b.rf_base_b}%</span>
+                    </div>
+                </div>
+                <div class="factor-pill">
+                    <div class="factor-pill__title">Average Agent Pro Win Rate</div>
+                    <div class="factor-pill__vs">
+                        <span style="color:var(--accent)">Team A: ${b.avg_wr_a}%</span>
+                        <span style="color:var(--blue)">Team B: ${b.avg_wr_b}%</span>
+                    </div>
+                </div>
+                <div class="factor-pill">
+                    <div class="factor-pill__title">Role Composition Readiness</div>
+                    <div class="factor-pill__vs">
+                        <span style="color:var(--accent)">Team A: ${b.role_a.composite_pct}%</span>
+                        <span style="color:var(--blue)">Team B: ${b.role_b.composite_pct}%</span>
+                    </div>
+                </div>
+            `;
+
+            // 3. Agent stats callout
+            const aCall = document.getElementById('agentStatsCallout');
+            aCall.innerHTML = `
+                <div><strong style="color:var(--accent)">Team A Avg:</strong> ${b.avg_wr_a}%</div>
+                <div><strong>Delta:</strong> ${b.wr_delta >= 0 ? '+' : ''}${b.wr_delta}% ${b.wr_delta >= 0 ? 'Team A advantage' : 'Team B advantage'}</div>
+                <div><strong style="color:var(--blue)">Team B Avg:</strong> ${b.avg_wr_b}%</div>
+            `;
+
+            // 4. Tree votes bar
+            const tBar = document.getElementById('treeVotesBar');
+            const t = b.tree_info;
+            tBar.innerHTML = `
+                <div class="tree-bar-track">
+                    <div class="tree-bar-track__a" style="width: ${t.pct_a}%" title="Team A Favored: ${t.votes_a} trees (${t.pct_a}%)"></div>
+                    <div class="tree-bar-track__neutral" style="width: ${t.pct_neutral}%" title="Dead Heat / Split: ${t.neutral} trees (${t.pct_neutral}%)"></div>
+                    <div class="tree-bar-track__b" style="width: ${t.pct_b}%" title="Team B Favored: ${t.votes_b} trees (${t.pct_b}%)"></div>
+                </div>
+                <div class="tree-votes-stats">
+                    <span class="tree-stat-item"><span class="tree-dot tree-dot--a"></span> Team A Favored: <strong>${t.votes_a}</strong> (${t.pct_a}%)</span>
+                    <span class="tree-stat-item"><span class="tree-dot tree-dot--neutral"></span> Tossup: <strong>${t.neutral}</strong> (${t.pct_neutral}%)</span>
+                    <span class="tree-stat-item"><span class="tree-dot tree-dot--b"></span> Team B Favored: <strong>${t.votes_b}</strong> (${t.pct_b}%)</span>
+                </div>
+            `;
+
+            // 5. Role inspection cards
+            renderRoleCard('roleCardA', 'Team A', b.role_a, 'var(--accent)');
+            renderRoleCard('roleCardB', 'Team B', b.role_b, 'var(--blue)');
+        }
+
+        function renderRoleCard(containerId, teamName, roleData, teamColor) {
+            const container = document.getElementById(containerId);
+            const standardRoles = ["Controllers", "Duelists", "Initiators", "Sentinels"];
+
+            let badgesHtml = '';
+            standardRoles.forEach(r => {
+                const isPresent = roleData.present_roles.includes(r);
+                if (isPresent) {
+                    badgesHtml += `
+                        <div class="role-badge role-badge--ok">
+                            <span>✓ ${r}</span>
+                            <span>Ready</span>
+                        </div>
+                    `;
+                } else {
+                    const atkPenalty = roleData.missing_atk.find(x => x.role === r)?.penalty || 0;
+                    const dfnPenalty = roleData.missing_dfn.find(x => x.role === r)?.penalty || 0;
+                    badgesHtml += `
+                        <div class="role-badge role-badge--warn">
+                            <span>⚠ Missing ${r}</span>
+                            <span>-${atkPenalty}% Atk / -${dfnPenalty}% Def</span>
+                        </div>
+                    `;
+                }
+            });
+
+            container.innerHTML = `
+                <div class="role-team-card__head">
+                    <span class="role-team-card__name" style="color:${teamColor}">${teamName}</span>
+                    <span class="role-team-card__score">Health: ${roleData.composite_pct}%</span>
+                </div>
+                <div class="role-badges-list">
+                    ${badgesHtml}
+                </div>
+            `;
+        }
+
+        function renderActiveTabChart() {
+            if (!currentBreakdown || typeof Chart === 'undefined') return;
+
+            const b = currentBreakdown;
+
+            if (activeTab === 'pipeline') {
+                renderPipelineChart(b);
+            } else if (activeTab === 'factors') {
+                renderFactorsChart(b);
+            } else if (activeTab === 'agents') {
+                renderAgentsChart(b);
+            } else if (activeTab === 'trees') {
+                renderTreesChart(b);
+            }
+        }
+
+        function renderPipelineChart(b) {
+            const ctx = document.getElementById('chartPipeline');
+            if (!ctx) return;
+            if (chartInstances.pipeline) chartInstances.pipeline.destroy();
+
+            const labels = [
+                '1. Base RF Model (60%)',
+                '2. Agent Win Rates (20%)',
+                '3. Role Synergy (20%)',
+                '4. Final Blended Estimate'
+            ];
+
+            const values = [
+                b.rf_base_a,
+                b.shift_wr,
+                b.shift_role,
+                b.final_prob_a
+            ];
+
+            const barColors = [
+                '#818384',
+                b.shift_wr >= 0 ? '#ff4655' : '#4fbcff',
+                b.shift_role >= 0 ? '#ff4655' : '#4fbcff',
+                b.final_prob_a >= 50 ? '#ff4655' : '#4fbcff'
+            ];
+
+            chartInstances.pipeline = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Impact on Team A Win %',
+                        data: values,
+                        backgroundColor: barColors,
+                        borderRadius: 4,
+                        maxBarThickness: 48
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#272729',
+                            borderColor: '#343536',
+                            borderWidth: 1,
+                            titleColor: '#fff',
+                            bodyColor: '#d7dadc',
+                            callbacks: {
+                                label: function(context) {
+                                    const idx = context.dataIndex;
+                                    const val = context.parsed.y;
+                                    if (idx === 0) return `Base RF Model: ${val}% win probability for Team A`;
+                                    if (idx === 1) return `Agent WR Delta: ${val >= 0 ? '+' : ''}${val}% shift (${b.avg_wr_a}% vs ${b.avg_wr_b}%)`;
+                                    if (idx === 2) return `Role Balance: ${val >= 0 ? '+' : ''}${val}% shift (${b.role_a.composite_pct}% vs ${b.role_b.composite_pct}%)`;
+                                    return `Final Probability: ${val}% for Team A (${(100 - val).toFixed(1)}% for Team B)`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            ticks: { color: '#d7dadc', font: { weight: '600' } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255,255,255,0.07)' },
+                            ticks: {
+                                callback: val => val + '%'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderFactorsChart(b) {
+            const ctx = document.getElementById('chartFactors');
+            if (!ctx) return;
+            if (chartInstances.factors) chartInstances.factors.destroy();
+
+            const labels = [
+                'Base RF Matchup',
+                'Avg Agent Win Rate',
+                'Role Health Score',
+                'Final Win Probability'
+            ];
+
+            chartInstances.factors = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Team A',
+                            data: [b.rf_base_a, b.avg_wr_a, b.role_a.composite_pct, b.final_prob_a],
+                            backgroundColor: '#ff4655',
+                            borderRadius: 4,
+                            maxBarThickness: 32
+                        },
+                        {
+                            label: 'Team B',
+                            data: [b.rf_base_b, b.avg_wr_b, b.role_b.composite_pct, b.final_prob_b],
+                            backgroundColor: '#4fbcff',
+                            borderRadius: 4,
+                            maxBarThickness: 32
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: { color: '#d7dadc', font: { weight: '600' } }
+                        },
+                        tooltip: {
+                            backgroundColor: '#272729',
+                            borderColor: '#343536',
+                            borderWidth: 1,
+                            titleColor: '#fff',
+                            bodyColor: '#d7dadc',
+                            callbacks: {
+                                label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y}%`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            ticks: { color: '#d7dadc', font: { weight: '500' } }
+                        },
+                        y: {
+                            min: 0,
+                            max: 100,
+                            grid: { color: 'rgba(255,255,255,0.07)' },
+                            ticks: { callback: v => v + '%' }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderAgentsChart(b) {
+            const ctx = document.getElementById('chartAgents');
+            if (!ctx) return;
+            if (chartInstances.agents) chartInstances.agents.destroy();
+
+            const labels = [];
+            const dataVals = [];
+            const colors = [];
+
+            b.agents_a.forEach(a => {
+                labels.push(`A · ${a.name.toUpperCase()} (${a.role})`);
+                dataVals.push(a.winrate);
+                colors.push('#ff4655');
+            });
+
+            b.agents_b.forEach(a => {
+                labels.push(`B · ${a.name.toUpperCase()} (${a.role})`);
+                dataVals.push(a.winrate);
+                colors.push('#4fbcff');
+            });
+
+            chartInstances.agents = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Smoothed Win Rate',
+                        data: dataVals,
+                        backgroundColor: colors,
+                        borderRadius: 3,
+                        maxBarThickness: 16
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#272729',
+                            borderColor: '#343536',
+                            borderWidth: 1,
+                            titleColor: '#fff',
+                            bodyColor: '#d7dadc',
+                            callbacks: {
+                                label: ctx => `Historical Win Rate: ${ctx.parsed.x}%`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            min: 35,
+                            max: 65,
+                            grid: { color: 'rgba(255,255,255,0.07)' },
+                            ticks: { callback: v => v + '%' }
+                        },
+                        y: {
+                            grid: { display: false },
+                            ticks: { color: '#d7dadc', font: { size: 11 } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function renderTreesChart(b) {
+            const ctx = document.getElementById('chartTrees');
+            if (!ctx) return;
+            if (chartInstances.trees) chartInstances.trees.destroy();
+
+            const t = b.tree_info;
+            const barColors = [
+                '#4fbcff',
+                '#72c6fa',
+                '#6a6a6b',
+                '#ff7883',
+                '#ff4655'
+            ];
+
+            chartInstances.trees = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: t.bucket_labels,
+                    datasets: [{
+                        label: 'Number of Decision Trees',
+                        data: t.buckets,
+                        backgroundColor: barColors,
+                        borderRadius: 4,
+                        maxBarThickness: 40
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#272729',
+                            borderColor: '#343536',
+                            borderWidth: 1,
+                            titleColor: '#fff',
+                            bodyColor: '#d7dadc',
+                            callbacks: {
+                                label: ctx => `${ctx.parsed.y} trees (${((ctx.parsed.y / t.total) * 100).toFixed(1)}% of ensemble)`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            ticks: { color: '#d7dadc', font: { size: 11 } }
+                        },
+                        y: {
+                            grid: { color: 'rgba(255,255,255,0.07)' },
+                            ticks: { callback: v => v + ' trees' }
+                        }
+                    }
+                }
+            });
         }
     </script>
 
