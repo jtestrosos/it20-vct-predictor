@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Import Excel/CSV files, store data in SQLite database, and view data-driven visualizations and insights for VCT matches.">
+    <title>Data & Insights - VCT Match Platform</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='icons/valorant-logo.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
+</head>
+
+<body>
+
+    <div class="container container--wide">
+
+        <!-- Header -->
+        <div class="header">
+            <div class="header__icon">
+                <img src="{{ url_for('static', filename='icons/valorant-logo.png') }}" alt="Valorant Logo"
+                    style="width: 100%; height: 100%; object-fit: contain;">
+            </div>
+            <div class="header__text">
+                <h1>VCT Analytics & Database Platform</h1>
+                <p>Import Excel or CSV files, store datasets in SQLite, and explore live visualizations and insights.</p>
+            </div>
+            <nav class="nav-links">
+                <a href="{{ url_for('home') }}" class="nav-link">Predictor</a>
+                <a href="{{ url_for('insights') }}" class="nav-link active">Data & Insights</a>
+                <a href="{{ url_for('about') }}" class="nav-link">How It Works</a>
+            </nav>
+        </div>
+
+        <!-- KPI Metrics Grid -->
+        <div class="stats-kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-card__label">Active Matches (In Graphs)</div>
+                <div class="kpi-card__value" id="kpiTotalMatches">{{ "{:,}".format(stats.total_matches) }}</div>
+                <div class="kpi-card__sub" id="kpiArchivedMatchesSub">{{ stats.archived_matches }} archived excluded</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-card__label">Imported Files</div>
+                <div class="kpi-card__value" id="kpiTotalFiles">{{ stats.total_files }}</div>
+                <div class="kpi-card__sub" id="kpiFilesBreakdownSub">{{ stats.active_files }} active · {{ stats.archived_files }} archived</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-card__label">Most Contested Map</div>
+                <div class="kpi-card__value" id="kpiTopMap">{{ stats.top_map }}</div>
+                <div class="kpi-card__sub" id="kpiTopMapCount">{{ stats.top_map_count }} matches played</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-card__label">Avg Victory Margin</div>
+                <div class="kpi-card__value" id="kpiAvgMargin">{{ stats.avg_margin }} <span style="font-size:14px;font-weight:500;">rounds</span></div>
+                <div class="kpi-card__sub" id="kpiAvgRounds">Across {{ stats.avg_rounds }} avg rounds</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-card__label">Predictions Logged</div>
+                <div class="kpi-card__value" id="kpiTotalPredictions">{{ stats.total_predictions }}</div>
+                <div class="kpi-card__sub">Real-time model inferences</div>
+            </div>
+        </div>
+
+        <!-- Section: Excel & CSV Import -->
+        <div class="card">
+            <div class="card__title">
+                <span>📁 Import Excel or CSV Files to Database</span>
+                <span class="count">Supports .csv, .xlsx, .xls</span>
+            </div>
+            <div class="card__body">
+                <p class="section-desc">
+                    Upload new match records in <strong>Excel (.xlsx, .xls)</strong> or <strong>CSV (.csv)</strong> format. 
+                    The application parses columns, normalizes scores, saves records into the SQLite database, and automatically recomputes visualizations and insights.
+                </p>
+
+                <!-- Upload Dropzone Form -->
+                <form id="uploadForm" class="upload-zone" onsubmit="handleUpload(event)">
+                    <div class="upload-zone__inner">
+                        <div class="upload-icon">📄</div>
+                        <div class="upload-prompt">
+                            <strong>Choose an Excel or CSV file</strong> or drag & drop here
+                        </div>
+                        <div class="upload-types">Accepted formats: .csv, .xlsx, .xls (Max 15MB)</div>
+                        <input type="file" id="fileInput" name="file" accept=".csv, .xlsx, .xls" class="file-input-hidden" onchange="fileSelected(this)">
+                        <button type="button" class="btn-file-select" onclick="document.getElementById('fileInput').click()">Browse File</button>
+                    </div>
+                    <div id="selectedFileInfo" class="selected-file-info" style="display:none;">
+                        <span id="selectedFileName"></span>
+                        <button type="submit" class="btn-upload" id="btnUpload">Upload & Store in Database</button>
+                    </div>
+                </form>
+
+                <!-- Feedback Message -->
+                <div id="importAlert" class="import-alert" style="display:none;"></div>
+
+                <!-- Template & Export Actions -->
+                <div class="sample-actions-row">
+                    <span class="sample-label">Testing templates:</span>
+                    <a href="{{ url_for('download_sample_template', file_format='csv') }}" class="btn-pill-action">
+                        📥 Download Sample CSV
+                    </a>
+                    <a href="{{ url_for('download_sample_template', file_format='excel') }}" class="btn-pill-action">
+                        📥 Download Sample Excel (.xlsx)
+                    </a>
+                    <a href="{{ url_for('export_matches') }}" class="btn-pill-action btn-pill-action--export">
+                        📤 Export Active Matches (CSV)
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section: Dynamic Data Insights -->
+        <div class="card">
+            <div class="card__title">
+                <span>💡 Automated Statistical Insights</span>
+                <span class="count">Computed Live from SQLite</span>
+            </div>
+            <div class="card__body">
+                <div class="insights-grid" id="insightsGrid">
+                    {% for ins in insights %}
+                    <div class="insight-item">
+                        <div class="insight-item__title">
+                            <span class="insight-badge">INSIGHT</span>
+                            {{ ins.title }}
+                        </div>
+                        <p class="insight-item__body">{{ ins.body }}</p>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Section: Database Visualizations -->
+        <div class="card">
+            <div class="card__title">
+                <span>📊 Database Visualizations</span>
+                <span class="count">4 Analytical Charts</span>
+            </div>
+            <div class="card__body">
+                <div class="charts-2x2-grid">
+                    <!-- Chart 1: Map Distribution -->
+                    <div class="chart-box">
+                        <div class="chart-box__title">Map Play Frequency Distribution</div>
+                        <div class="chart-box__desc">Total competitive matches played per map in database</div>
+                        <div class="chart-container">
+                            <canvas id="chartMapsDb"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Chart 2: Match Closeness / Margins -->
+                    <div class="chart-box">
+                        <div class="chart-box__title">Match Competitiveness & Margins</div>
+                        <div class="chart-box__desc">Close finishes vs blowouts across all database matches</div>
+                        <div class="chart-container">
+                            <canvas id="chartMarginsDb"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Chart 3: Top Winning Teams -->
+                    <div class="chart-box">
+                        <div class="chart-box__title">Top Winning Rosters</div>
+                        <div class="chart-box__desc">Teams with highest total match victories in database</div>
+                        <div class="chart-container">
+                            <canvas id="chartTeamsDb"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Chart 4: Rounds per Map -->
+                    <div class="chart-box">
+                        <div class="chart-box__title">Average Rounds & Score Margin by Map</div>
+                        <div class="chart-box__desc">Arena duration and volatility across competitive maps</div>
+                        <div class="chart-container">
+                            <canvas id="chartRoundsDb"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section: Database Matches Explorer -->
+        <div class="card">
+            <div class="card__title">
+                <span>🗄️ Database Records Explorer</span>
+                <span class="count" id="tableRecordCount">{{ recent_matches|length }} Matches Shown</span>
+            </div>
+            <div class="card__body">
+                <div class="table-filter-bar">
+                    <input type="text" id="tableSearchInput" placeholder="Filter by team, map, or tournament..." onkeyup="filterTable(this.value)">
+                </div>
+                <div class="table-responsive">
+                    <table class="db-table" id="matchesTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Tournament</th>
+                                <th>Map</th>
+                                <th>Team A</th>
+                                <th>Score</th>
+                                <th>Team B</th>
+                                <th>Winner</th>
+                                <th>Margin</th>
+                                <th>Source</th>
+                            </tr>
+                        </thead>
+                        <tbody id="matchesTableBody">
+                            {% for m in recent_matches %}
+                            <tr>
+                                <td>{{ m.id }}</td>
+                                <td>{{ m.tournament }}</td>
+                                <td><strong>{{ m.map }}</strong></td>
+                                <td>{{ m.team_a }}</td>
+                                <td class="score-cell">{{ m.team_a_score }} – {{ m.team_b_score }}</td>
+                                <td>{{ m.team_b }}</td>
+                                <td>
+                                    <span class="winner-tag {% if m.winner == m.team_a %}winner-a{% else %}winner-b{% endif %}">
+                                        {{ m.winner }}
+                                    </span>
+                                </td>
+                                <td>{{ m.margin }} pts</td>
+                                <td class="source-cell">{{ m.source_file }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section: Imported Files Registry -->
+        <div class="card">
+            <div class="card__title">
+                <span>📑 Imported Files Registry & Archive Control</span>
+                <span class="count" id="filesCardCount">{{ stats.active_files }} Active · {{ stats.archived_files }} Archived</span>
+            </div>
+            <div class="card__body">
+                <p class="section-desc">
+                    Manage imported match datasets. Files marked as <strong>Archived</strong> are excluded from all charts, victory margin metrics, and team win counts. 
+                    You can inspect individual matches, archive active datasets, or unarchive previously uploaded files at any time to restore their data.
+                </p>
+
+                <!-- Active and Archived View Tabs -->
+                <div class="table-tab-bar" id="filesTabBar">
+                    <button type="button" class="table-tab-btn active" id="tabActiveFiles" onclick="setFileFilter('active')">
+                        🟢 Active Datasets (In Graphs) <span class="table-tab-count" id="countActiveFiles">{{ stats.active_files }}</span>
+                    </button>
+                    <button type="button" class="table-tab-btn table-tab-btn--archived" id="tabArchivedFiles" onclick="setFileFilter('archived')">
+                        📦 Archived Datasets (Excluded) <span class="table-tab-count" id="countArchivedFiles">{{ stats.archived_files }}</span>
+                    </button>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="db-table" id="filesTable">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Filename</th>
+                                <th>Type</th>
+                                <th>Rows</th>
+                                <th>Upload Date</th>
+                                <th>Graph Status</th>
+                                <th style="text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="filesTableBody">
+                            <!-- Populated dynamically by renderFilesTable() -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            IT 20 Final Project · Predicting Valorant Match Outcomes Utilizing Supervised Machine Learning ·
+            <a href="{{ url_for('home') }}">Predictor</a> ·
+            <a href="{{ url_for('about') }}">How It Works</a>
+        </div>
+
+    </div>
+
+    <!-- Inject initial visualization data from Flask -->
+    <script>
+        const initialVisData = {{ vis_data|tojson }};
+        const dbCharts = {};
+
+        // Configure Chart.js global theme defaults
+        if (typeof Chart !== 'undefined') {
+            Chart.defaults.color = '#818384';
+            Chart.defaults.font.family = "'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+            Chart.defaults.font.size = 11;
+        }
+
+        // Initialize all 4 database charts
+        function initDbCharts(data) {
+            // Chart 1: Maps
+            const ctxMaps = document.getElementById('chartMapsDb');
+            if (ctxMaps) {
+                if (dbCharts.maps) dbCharts.maps.destroy();
+                dbCharts.maps = new Chart(ctxMaps, {
+                    type: 'bar',
+                    data: {
+                        labels: data.maps.labels,
+                        datasets: [{
+                            label: 'Matches Played',
+                            data: data.maps.counts,
+                            backgroundColor: '#ff4655',
+                            borderRadius: 4,
+                            maxBarThickness: 32
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                backgroundColor: '#272729',
+                                borderColor: '#343536',
+                                borderWidth: 1,
+                                callbacks: {
+                                    label: ctx => `${ctx.parsed.y} competitive matches`
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { grid: { color: 'rgba(255,255,255,0.05)' } },
+                            y: { grid: { color: 'rgba(255,255,255,0.07)' } }
+                        }
+                    }
+                });
+            }
+
+            // Chart 2: Margins / Closeness
+            const ctxMargins = document.getElementById('chartMarginsDb');
+            if (ctxMargins) {
+                if (dbCharts.margins) dbCharts.margins.destroy();
+                dbCharts.margins = new Chart(ctxMargins, {
+                    type: 'doughnut',
+                    data: {
+                        labels: data.margins.labels,
+                        datasets: [{
+                            data: data.margins.counts,
+                            backgroundColor: ['#46d160', '#4fbcff', '#ffb020', '#ff4655'],
+                            borderColor: '#272729',
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'right',
+                                labels: { color: '#d7dadc', boxWidth: 12, padding: 10 }
+                            },
+                            tooltip: {
+                                backgroundColor: '#272729',
+                                borderColor: '#343536',
+                                borderWidth: 1,
+                                callbacks: {
+                                    label: ctx => ` ${ctx.label}: ${ctx.parsed} matches`
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Chart 3: Top Teams
+            const ctxTeams = document.getElementById('chartTeamsDb');
+            if (ctxTeams) {
+                if (dbCharts.teams) dbCharts.teams.destroy();
+                dbCharts.teams = new Chart(ctxTeams, {
+                    type: 'bar',
+                    data: {
+                        labels: data.teams.labels,
+                        datasets: [{
+                            label: 'Victories',
+                            data: data.teams.wins,
+                            backgroundColor: '#4fbcff',
+                            borderRadius: 4,
+                            maxBarThickness: 24
+                        }]
+                    },
+                    options: {
+                        indexAxis: 'y',
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                backgroundColor: '#272729',
+                                borderColor: '#343536',
+                                borderWidth: 1,
+                                callbacks: {
+                                    label: ctx => `${ctx.parsed.x} match wins`
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { grid: { color: 'rgba(255,255,255,0.07)' } },
+                            y: { grid: { display: false } }
+                        }
+                    }
+                });
+            }
+
+            // Chart 4: Rounds & Margins per Map
+            const ctxRounds = document.getElementById('chartRoundsDb');
+            if (ctxRounds) {
+                if (dbCharts.rounds) dbCharts.rounds.destroy();
+                dbCharts.rounds = new Chart(ctxRounds, {
+                    type: 'bar',
+                    data: {
+                        labels: data.rounds.labels,
+                        datasets: [
+                            {
+                                label: 'Avg Total Rounds',
+                                data: data.rounds.rounds,
+                                backgroundColor: 'rgba(79, 188, 255, 0.7)',
+                                borderRadius: 4,
+                                maxBarThickness: 20
+                            },
+                            {
+                                label: 'Avg Victory Margin',
+                                data: data.rounds.margins,
+                                backgroundColor: 'rgba(255, 70, 85, 0.8)',
+                                borderRadius: 4,
+                                maxBarThickness: 20
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'top',
+                                labels: { color: '#d7dadc', boxWidth: 12 }
+                            },
+                            tooltip: {
+                                backgroundColor: '#272729',
+                                borderColor: '#343536',
+                                borderWidth: 1
+                            }
+                        },
+                        scales: {
+                            x: { grid: { color: 'rgba(255,255,255,0.05)' } },
+                            y: { grid: { color: 'rgba(255,255,255,0.07)' }, min: 0 }
+                        }
+                    }
+                });
+            }
+        }
+
+        // Handle file selection in input
+        function fileSelected(input) {
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
+                document.getElementById('selectedFileName').textContent = `Selected: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+                document.getElementById('selectedFileInfo').style.display = 'flex';
+            }
+        }
+
+        // Handle asynchronous upload & database import
+        async function handleUpload(e) {
+            e.preventDefault();
+            const input = document.getElementById('fileInput');
+            if (!input.files || !input.files[0]) {
+                showImportAlert('Please select a CSV or Excel file to upload.', false);
+                return;
+            }
+
+            const btn = document.getElementById('btnUpload');
+            btn.disabled = true;
+            btn.textContent = 'Importing to Database…';
+
+            const formData = new FormData();
+            formData.append('file', input.files[0]);
+
+            try {
+                const r = await fetch('/api/import', {
+                    method: 'POST',
+                    body: formData
+                });
+                const res = await r.json();
+
+                if (!r.ok || !res.success) {
+                    showImportAlert(res.error || 'Import failed. Check file format.', false);
+                } else {
+                    showImportAlert(`✓ ${res.message}`, true);
+                    input.value = '';
+                    document.getElementById('selectedFileInfo').style.display = 'none';
+
+                    // Update local file registry state
+                    if (res.imported_files) {
+                        currentFiles = res.imported_files;
+                        renderFilesTable(currentFiles, currentFileFilter);
+                    }
+
+                    // Update KPI cards
+                    updateKpiCards(res.stats);
+
+                    // Update Insights Grid
+                    updateInsightsGrid(res.insights);
+
+                    // Update Visualizations
+                    initDbCharts(res.vis_data);
+
+                    // Update Recent Matches Table
+                    if (res.recent_matches) updateMatchesTable(res.recent_matches);
+                }
+            } catch (err) {
+                console.error(err);
+                showImportAlert('Network error occurred during import.', false);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Upload & Store in Database';
+            }
+        }
+
+        function showImportAlert(msg, isSuccess) {
+            const el = document.getElementById('importAlert');
+            el.textContent = msg;
+            el.className = 'import-alert ' + (isSuccess ? 'import-alert--success' : 'import-alert--error');
+            el.style.display = 'block';
+            if (isSuccess) {
+                setTimeout(() => el.style.display = 'none', 6000);
+            }
+        }
+
+        function updateKpiCards(s) {
+            document.getElementById('kpiTotalMatches').textContent = Number(s.total_matches).toLocaleString();
+            const archSub = document.getElementById('kpiArchivedMatchesSub');
+            if (archSub) archSub.textContent = `${s.archived_matches || 0} archived excluded`;
+
+            document.getElementById('kpiTotalFiles').textContent = s.total_files;
+            const filesSub = document.getElementById('kpiFilesBreakdownSub');
+            if (filesSub) filesSub.textContent = `${s.active_files || 0} active · ${s.archived_files || 0} archived`;
+
+            document.getElementById('kpiTopMap').textContent = s.top_map;
+            document.getElementById('kpiTopMapCount').textContent = `${s.top_map_count} matches played`;
+            document.getElementById('kpiAvgMargin').innerHTML = `${s.avg_margin} <span style="font-size:14px;font-weight:500;">rounds</span>`;
+            document.getElementById('kpiAvgRounds').textContent = `Across ${s.avg_rounds} avg rounds`;
+            document.getElementById('kpiTotalPredictions').textContent = s.total_predictions;
+        }
+
+        function updateInsightsGrid(insights) {
+            const grid = document.getElementById('insightsGrid');
+            grid.innerHTML = insights.map(ins => `
+                <div class="insight-item">
+                    <div class="insight-item__title">
+                        <span class="insight-badge">INSIGHT</span>
+                        ${ins.title}
+                    </div>
+                    <p class="insight-item__body">${ins.body}</p>
+                </div>
+            `).join('');
+        }
+
+        function updateMatchesTable(matches) {
+            const tbody = document.getElementById('matchesTableBody');
+            tbody.innerHTML = matches.map(m => `
+                <tr>
+                    <td>${m.id}</td>
+                    <td>${escapeHtml(m.tournament || 'VCT')}</td>
+                    <td><strong>${escapeHtml(m.map)}</strong></td>
+                    <td>${escapeHtml(m.team_a)}</td>
+                    <td class="score-cell">${m.team_a_score} – ${m.team_b_score}</td>
+                    <td>${escapeHtml(m.team_b)}</td>
+                    <td>
+                        <span class="winner-tag ${m.winner === m.team_a ? 'winner-a' : 'winner-b'}">
+                            ${escapeHtml(m.winner)}
+                        </span>
+                    </td>
+                    <td>${m.margin} pts</td>
+                    <td class="source-cell">${escapeHtml(m.source_file || '')}</td>
+                </tr>
+            `).join('');
+            document.getElementById('tableRecordCount').textContent = `${matches.length} Matches Shown`;
+        }
+
+        // --- Archive & File Registry Management ---
+        let currentFiles = {{ imported_files|tojson }};
+        let currentFileFilter = 'active';
+        let activeModalFileId = null;
+
+        function setFileFilter(filter) {
+            currentFileFilter = (filter === 'archived') ? 'archived' : 'active';
+            const tabActive = document.getElementById('tabActiveFiles');
+            const tabArchived = document.getElementById('tabArchivedFiles');
+            if (tabActive) tabActive.classList.toggle('active', currentFileFilter === 'active');
+            if (tabArchived) tabArchived.classList.toggle('active', currentFileFilter === 'archived');
+            renderFilesTable(currentFiles, currentFileFilter);
+        }
+
+        function renderFilesTable(files, filter = 'active') {
+            const tbody = document.getElementById('filesTableBody');
+            const activeFiles = files.filter(f => !f.is_archived);
+            const archivedFiles = files.filter(f => f.is_archived);
+
+            const filtered = (filter === 'archived') ? archivedFiles : activeFiles;
+
+            // Update badge counters
+            const countActiveEl = document.getElementById('countActiveFiles');
+            if (countActiveEl) countActiveEl.textContent = activeFiles.length;
+            const countArchEl = document.getElementById('countArchivedFiles');
+            if (countArchEl) countArchEl.textContent = archivedFiles.length;
+            const cardCountEl = document.getElementById('filesCardCount');
+            if (cardCountEl) cardCountEl.textContent = `${activeFiles.length} Active · ${archivedFiles.length} Archived`;
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align:center; padding: 28px; color: var(--text-faint);">
+                            No ${filter === 'archived' ? 'archived' : 'active'} datasets found.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(f => {
+                const isArchived = Boolean(f.is_archived);
+                const statusBadge = isArchived
+                    ? `<span class="status-badge status-badge--archived">📦 Archived</span>`
+                    : `<span class="status-badge status-badge--ok">🟢 Active</span>`;
+
+                const archiveBtn = isArchived
+                    ? `<button type="button" class="btn-action btn-action--unarchive" onclick="unarchiveFile(${f.id}, '${escapeHtml(f.filename)}')">
+                         🔄 Unarchive
+                       </button>`
+                    : `<button type="button" class="btn-action btn-action--archive" onclick="archiveFile(${f.id}, '${escapeHtml(f.filename)}')">
+                         📦 Archive
+                       </button>`;
+
+                const viewBtn = `<button type="button" class="btn-action btn-action--view" onclick="viewFileMatches(${f.id}, '${escapeHtml(f.filename)}')">
+                                   👁️ View Records
+                                 </button>`;
+
+                return `
+                    <tr class="${isArchived ? 'row-archived' : ''}">
+                        <td>${f.id}</td>
+                        <td><strong>${escapeHtml(f.filename)}</strong></td>
+                        <td><span class="file-type-badge">${escapeHtml(f.file_type)}</span></td>
+                        <td>${Number(f.row_count).toLocaleString()} rows</td>
+                        <td>${escapeHtml(f.uploaded_at || '')}</td>
+                        <td>${statusBadge}</td>
+                        <td style="text-align:right;">
+                            <div class="actions-cell" style="justify-content: flex-end;">
+                                ${archiveBtn}
+                                ${viewBtn}
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        async function archiveFile(fileId, filename) {
+            showImportAlert(`Archiving "${filename}" and excluding from graphs...`, true);
+            try {
+                const r = await fetch(`/api/files/${fileId}/archive`, { method: 'POST' });
+                const res = await r.json();
+                if (!r.ok || !res.success) {
+                    showImportAlert(res.error || 'Failed to archive dataset.', false);
+                    return;
+                }
+
+                showImportAlert(`📦 File "${filename}" archived! Its records are now removed from all graphs and analytics.`, true);
+
+                currentFiles = res.imported_files;
+                updateKpiCards(res.stats);
+                updateInsightsGrid(res.insights);
+                initDbCharts(res.vis_data);
+                if (res.recent_matches) updateMatchesTable(res.recent_matches);
+                renderFilesTable(currentFiles, currentFileFilter);
+
+                if (activeModalFileId === fileId) {
+                    viewFileMatches(fileId, filename);
+                }
+            } catch (err) {
+                console.error(err);
+                showImportAlert('Network error occurred while archiving dataset.', false);
+            }
+        }
+
+        async function unarchiveFile(fileId, filename) {
+            showImportAlert(`Restoring "${filename}" into graphs and analytics...`, true);
+            try {
+                const r = await fetch(`/api/files/${fileId}/unarchive`, { method: 'POST' });
+                const res = await r.json();
+                if (!r.ok || !res.success) {
+                    showImportAlert(res.error || 'Failed to unarchive dataset.', false);
+                    return;
+                }
+
+                showImportAlert(`🔄 File "${filename}" unarchived! Its records are now restored into graphs and analytics.`, true);
+
+                currentFiles = res.imported_files;
+                updateKpiCards(res.stats);
+                updateInsightsGrid(res.insights);
+                initDbCharts(res.vis_data);
+                if (res.recent_matches) updateMatchesTable(res.recent_matches);
+                renderFilesTable(currentFiles, currentFileFilter);
+
+                if (activeModalFileId === fileId) {
+                    viewFileMatches(fileId, filename);
+                }
+            } catch (err) {
+                console.error(err);
+                showImportAlert('Network error occurred while unarchiving dataset.', false);
+            }
+        }
+
+        async function viewFileMatches(fileId, filename) {
+            activeModalFileId = fileId;
+            const modal = document.getElementById('fileMatchesModal');
+            const tbody = document.getElementById('modalMatchesTableBody');
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 24px; color: var(--text-dim);">Loading dataset records…</td></tr>`;
+            modal.classList.add('active');
+
+            try {
+                const r = await fetch(`/api/files/${fileId}/matches`);
+                const res = await r.json();
+                if (!r.ok || !res.success) {
+                    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color: var(--accent);">Failed to load match records.</td></tr>`;
+                    return;
+                }
+
+                const fileInfo = res.file;
+                const matches = res.matches;
+                const isArchived = Boolean(fileInfo.is_archived);
+
+                document.getElementById('modalFileTitle').textContent = `Dataset Records: ${fileInfo.filename}`;
+                document.getElementById('modalMetaFilename').textContent = fileInfo.filename;
+                document.getElementById('modalMetaRowCount').textContent = `${matches.length} matches`;
+
+                const badge = document.getElementById('modalFileStatusBadge');
+                badge.className = `status-badge ${isArchived ? 'status-badge--archived' : 'status-badge--ok'}`;
+                badge.textContent = isArchived ? '📦 Archived' : '🟢 Active';
+
+                const banner = document.getElementById('modalArchiveBanner');
+                if (isArchived) {
+                    banner.className = 'modal-banner modal-banner--archived';
+                    banner.innerHTML = '⚠️ <strong>Archived Dataset:</strong> Matches from this file are excluded from all charts, KPI stats, and automated insights.';
+                } else {
+                    banner.className = 'modal-banner modal-banner--active';
+                    banner.innerHTML = '✓ <strong>Active Dataset:</strong> Matches from this file are actively contributing to charts, graphs, and insights.';
+                }
+
+                const actionContainer = document.getElementById('modalActionContainer');
+                actionContainer.innerHTML = isArchived
+                    ? `<button type="button" class="btn-action btn-action--unarchive" onclick="unarchiveFile(${fileInfo.id}, '${escapeHtml(fileInfo.filename)}')">🔄 Unarchive & Restore to Graphs</button>`
+                    : `<button type="button" class="btn-action btn-action--archive" onclick="archiveFile(${fileInfo.id}, '${escapeHtml(fileInfo.filename)}')">📦 Archive & Exclude from Graphs</button>`;
+
+                if (matches.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 24px; color: var(--text-faint);">No match records found for this dataset.</td></tr>`;
+                    return;
+                }
+
+                tbody.innerHTML = matches.map(m => `
+                    <tr>
+                        <td>${m.id}</td>
+                        <td>${escapeHtml(m.tournament || 'VCT')}</td>
+                        <td><strong>${escapeHtml(m.map)}</strong></td>
+                        <td>${escapeHtml(m.team_a)}</td>
+                        <td class="score-cell">${m.team_a_score} – ${m.team_b_score}</td>
+                        <td>${escapeHtml(m.team_b)}</td>
+                        <td>
+                            <span class="winner-tag ${m.winner === m.team_a ? 'winner-a' : 'winner-b'}">
+                                ${escapeHtml(m.winner)}
+                            </span>
+                        </td>
+                        <td>${m.margin} pts</td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error(err);
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color: var(--accent);">Error loading dataset records.</td></tr>`;
+            }
+        }
+
+        function closeFileMatchesModal() {
+            document.getElementById('fileMatchesModal').classList.remove('active');
+            activeModalFileId = null;
+        }
+
+        function closeModalOnBackdrop(e) {
+            if (e.target.id === 'fileMatchesModal') {
+                closeFileMatchesModal();
+            }
+        }
+
+        // Live table search filtering
+        function filterTable(q) {
+            const term = q.toLowerCase();
+            const rows = document.querySelectorAll('#matchesTableBody tr');
+            let visibleCount = 0;
+            rows.forEach(r => {
+                const text = r.textContent.toLowerCase();
+                const matches = text.includes(term);
+                r.style.display = matches ? '' : 'none';
+                if (matches) visibleCount++;
+            });
+            document.getElementById('tableRecordCount').textContent = `${visibleCount} Matches Filtered`;
+        }
+
+        // Drag & Drop listeners on dropzone
+        const dropZone = document.getElementById('uploadForm');
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, e => {
+                e.preventDefault();
+                dropZone.classList.add('upload-zone--dragover');
+            }, false);
+        });
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, e => {
+                e.preventDefault();
+                dropZone.classList.remove('upload-zone--dragover');
+            }, false);
+        });
+        dropZone.addEventListener('drop', e => {
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                const file = e.dataTransfer.files[0];
+                document.getElementById('fileInput').files = e.dataTransfer.files;
+                fileSelected(document.getElementById('fileInput'));
+            }
+        });
+
+        // Initialize charts and render files table when DOM is ready
+        window.addEventListener('DOMContentLoaded', () => {
+            initDbCharts(initialVisData);
+            renderFilesTable(currentFiles, currentFileFilter);
+        });
+    </script>
+
+    <!-- Modal Dialog: View File Matches -->
+    <div id="fileMatchesModal" class="modal-overlay" onclick="closeModalOnBackdrop(event)">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h3 class="modal-title" id="modalFileTitle">File Match Records</h3>
+                    <span id="modalFileStatusBadge" class="status-badge status-badge--ok">Active</span>
+                </div>
+                <button type="button" class="modal-close-btn" onclick="closeFileMatchesModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-meta-bar">
+                    <div class="modal-meta-item">
+                        <span>Dataset:</span>
+                        <strong id="modalMetaFilename">sample.csv</strong>
+                    </div>
+                    <div class="modal-meta-item">
+                        <span>Total Records:</span>
+                        <strong id="modalMetaRowCount">0</strong>
+                    </div>
+                    <div id="modalActionContainer">
+                        <!-- Quick Archive / Unarchive button -->
+                    </div>
+                </div>
+                <div id="modalArchiveBanner" class="modal-banner modal-banner--active">
+                    <!-- Dynamic state notice -->
+                </div>
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                    <table class="db-table" id="modalMatchesTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Tournament</th>
+                                <th>Map</th>
+                                <th>Team A</th>
+                                <th>Score</th>
+                                <th>Team B</th>
+                                <th>Winner</th>
+                                <th>Margin</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modalMatchesTableBody">
+                            <!-- Injected match rows -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</html>

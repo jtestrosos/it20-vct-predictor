@@ -2,12 +2,16 @@ import os
 import joblib
 import numpy as np
 import pandas as pd
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file, Response
 
+import database
 from model import TeamSymmetric  # noqa: F401 - needed for pickle to resolve the class
 
 app = Flask(__name__)
 app.secret_key = "vct_predictor_secret_key"
+
+# Initialize SQLite database and tables
+database.init_db()
 
 # ---------------------------------------------------------------------------
 # Roles Configuration
@@ -265,11 +269,26 @@ def predict():
 
     tree_info = get_tree_analysis(team_a, team_b, map_name, pick_adv)
 
+    winner_name = "Team A" if prob_a > 0.5 else "Team B"
+    conf_pct = round(max(prob_a, prob_b) * 100, 1)
+
+    # Log this prediction directly to the database
+    database.log_prediction(
+        map_name=map_name,
+        team_a_agents=team_a,
+        team_b_agents=team_b,
+        pick_adv=pick_adv,
+        prob_a=round(prob_a * 100, 1),
+        prob_b=round(prob_b * 100, 1),
+        winner=winner_name,
+        confidence=conf_pct
+    )
+
     return jsonify({
         "team_a_prob": round(prob_a * 100, 1),
         "team_b_prob": round(prob_b * 100, 1),
-        "winner": "Team A" if prob_a > 0.5 else "Team B",
-        "confidence": round(max(prob_a, prob_b) * 100, 1),
+        "winner": winner_name,
+        "confidence": conf_pct,
         "breakdown": {
             "rf_base_a": round(raw_rf_prob_a * 100, 1),
             "rf_base_b": round(raw_rf_prob_b * 100, 1),
@@ -289,6 +308,160 @@ def predict():
             "tree_info": tree_info,
         }
     })
+
+
+@app.route("/insights")
+def insights():
+    """Render the Data Import, Database Management, and Visualizations & Insights dashboard."""
+    stats = database.get_database_stats()
+    insights_list = database.get_data_insights()
+    vis_data = database.get_visualizations_data()
+    recent_matches = database.get_recent_matches(50)
+    imported_files = database.get_imported_files_list()
+
+    return render_template(
+        "insights.html",
+        stats=stats,
+        insights=insights_list,
+        vis_data=vis_data,
+        recent_matches=recent_matches,
+        imported_files=imported_files
+    )
+
+
+@app.route("/api/import", methods=["POST"])
+def api_import():
+    """Upload and import Excel (.xlsx, .xls) or CSV (.csv) file into the SQLite database."""
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "No file uploaded."}), 400
+
+    file = request.files["file"]
+    if not file or not file.filename:
+        return jsonify({"success": False, "error": "Empty or missing file."}), 400
+
+    filename = file.filename
+    success, message, count, file_id = database.import_file(file, filename)
+    if not success:
+        return jsonify({"success": False, "error": message}), 400
+
+    stats = database.get_database_stats()
+    insights_list = database.get_data_insights()
+    vis_data = database.get_visualizations_data()
+    recent_matches = database.get_recent_matches(50)
+    imported_files = database.get_imported_files_list()
+
+    return jsonify({
+        "success": True,
+        "message": message,
+        "count": count,
+        "file_id": file_id,
+        "stats": stats,
+        "insights": insights_list,
+        "vis_data": vis_data,
+        "recent_matches": recent_matches,
+        "imported_files": imported_files
+    })
+
+
+@app.route("/api/files/<int:file_id>/archive", methods=["POST"])
+def api_archive_file(file_id):
+    """Archive an imported file by ID, excluding its matches from graphs and insights."""
+    success, message, filename = database.archive_file(file_id)
+    if not success:
+        return jsonify({"success": False, "error": message}), 404
+
+    stats = database.get_database_stats()
+    insights_list = database.get_data_insights()
+    vis_data = database.get_visualizations_data()
+    recent_matches = database.get_recent_matches(50)
+    imported_files = database.get_imported_files_list()
+
+    return jsonify({
+        "success": True,
+        "message": message,
+        "filename": filename,
+        "stats": stats,
+        "insights": insights_list,
+        "vis_data": vis_data,
+        "recent_matches": recent_matches,
+        "imported_files": imported_files
+    })
+
+
+@app.route("/api/files/<int:file_id>/unarchive", methods=["POST"])
+def api_unarchive_file(file_id):
+    """Unarchive an imported file by ID, restoring its matches into graphs and insights."""
+    success, message, filename = database.unarchive_file(file_id)
+    if not success:
+        return jsonify({"success": False, "error": message}), 404
+
+    stats = database.get_database_stats()
+    insights_list = database.get_data_insights()
+    vis_data = database.get_visualizations_data()
+    recent_matches = database.get_recent_matches(50)
+    imported_files = database.get_imported_files_list()
+
+    return jsonify({
+        "success": True,
+        "message": message,
+        "filename": filename,
+        "stats": stats,
+        "insights": insights_list,
+        "vis_data": vis_data,
+        "recent_matches": recent_matches,
+        "imported_files": imported_files
+    })
+
+
+@app.route("/api/files/<int:file_id>/matches", methods=["GET"])
+def api_file_matches(file_id):
+    """Retrieve all match records belonging to a specific imported file."""
+    matches = database.get_file_matches(file_id)
+    files = database.get_imported_files_list()
+    file_info = next((f for f in files if f["id"] == file_id), None)
+    if not file_info:
+        return jsonify({"success": False, "error": "File not found."}), 404
+
+    return jsonify({
+        "success": True,
+        "file": file_info,
+        "matches": matches,
+        "count": len(matches)
+    })
+
+
+@app.route("/api/sample-template/<file_format>")
+def download_sample_template(file_format):
+    """Download ready-to-test sample match datasets in CSV or Excel format."""
+    file_format = file_format.lower()
+    if file_format == "csv":
+        sample_path = os.path.join(os.path.dirname(__file__), "samples", "vct_sample_matches.csv")
+        return send_file(sample_path, as_attachment=True, download_name="vct_sample_matches.csv", mimetype="text/csv")
+    elif file_format in ["excel", "xlsx"]:
+        sample_path = os.path.join(os.path.dirname(__file__), "samples", "vct_sample_matches.xlsx")
+        return send_file(
+            sample_path,
+            as_attachment=True,
+            download_name="vct_sample_matches.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    return jsonify({"error": "Invalid format specified. Use 'csv' or 'excel'."}), 400
+
+
+@app.route("/api/export-matches")
+def export_matches():
+    """Export active (or all) database matches as a downloadable CSV."""
+    include_archived = request.args.get("include_archived", "0") == "1"
+    with database.get_connection() as conn:
+        query = "SELECT * FROM matches ORDER BY id DESC;" if include_archived else "SELECT * FROM matches WHERE is_archived = 0 ORDER BY id DESC;"
+        df = pd.read_sql_query(query, conn)
+        csv_data = df.to_csv(index=False)
+        filename = "vct_all_matches_export.csv" if include_archived else "vct_active_matches_export.csv"
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment;filename={filename}"}
+        )
 
 
 @app.route("/about")

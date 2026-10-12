@@ -25,6 +25,11 @@
                 <h1>VCT Match Predictor</h1>
                 <p>Predict match outcomes using agent composition, map, and pick advantage.</p>
             </div>
+            <nav class="nav-links">
+                <a href="{{ url_for('home') }}" class="nav-link active">Predictor</a>
+                <a href="{{ url_for('insights') }}" class="nav-link">Data & Insights</a>
+                <a href="{{ url_for('about') }}" class="nav-link">How It Works</a>
+            </nav>
         </div>
 
         <!-- Team A -->
@@ -239,7 +244,9 @@
         <!-- Footer -->
         <div class="footer">
             IT 20 Final Project · Predicting Valorant Match Outcomes Utilizing Supervised Machine Learning ·
-            <a href="{{ url_for('about') }}">How it Works</a>
+            <a href="{{ url_for('home') }}">Predictor</a> ·
+            <a href="{{ url_for('insights') }}">Data & Insights</a> ·
+            <a href="{{ url_for('about') }}">How It Works</a>
         </div>
 
     </div>
